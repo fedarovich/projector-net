@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Samples": {
+      "commandName": "DebugRoslynComponent",
+      "targetProject": "..\\ProjectorNet.Samples\\ProjectorNet.Samples.csproj"
+    }
+  }
+}

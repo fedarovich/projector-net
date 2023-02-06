@@ -15,4 +15,8 @@ public class TestEntity
     public string NotNullString { get; set; } = null!;
 
     public int? IntToLong { get; set; }
+
+    public ICollection<string> Strings { get; set; } = null!;
+
+    public ICollection<int> IntsToString { get; set; } = null!;
 }

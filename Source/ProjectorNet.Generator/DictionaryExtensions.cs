@@ -1,5 +1,4 @@
 ﻿#nullable enable
-using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.CodeAnalysis;
@@ -33,6 +32,22 @@ public static class DictionaryExtensions
             typedConstant is { Kind: TypedConstantKind.Primitive, IsNull: false, Value: bool boolValue })
         {
             value = boolValue;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    public static bool TryGetInt32(
+        this IReadOnlyDictionary<string, TypedConstant> attributes,
+        string name,
+        out int value)
+    {
+        if (attributes.TryGetValue(name, out var typedConstant) &&
+            typedConstant is { Kind: TypedConstantKind.Primitive or TypedConstantKind.Enum, IsNull: false, Value: int intValue })
+        {
+            value = intValue;
             return true;
         }
 

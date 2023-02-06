@@ -15,6 +15,11 @@ public readonly record struct TypeName(string Name, string Namespace, string Ful
                 typeSymbol.ContainingNamespace.ToDisplayString(),
                 typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                 typeSymbol.NullableAnnotation),
+            IArrayTypeSymbol { ElementType: var elementType } arrayTypeSymbol => new TypeName(
+                elementType.Name + "[]",
+                elementType.ContainingNamespace.ToDisplayString(),
+                arrayTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                arrayTypeSymbol.NullableAnnotation),
             _ => throw new ArgumentException($"The {nameof(symbol)} must be a {nameof(INamedTypeSymbol)}", nameof(symbol))
         };
     }

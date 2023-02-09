@@ -23,6 +23,4 @@ public readonly record struct TypeName(string Name, string Namespace, string Ful
             _ => throw new ArgumentException($"The {nameof(symbol)} must be a {nameof(INamedTypeSymbol)}", nameof(symbol))
         };
     }
-
-
 }

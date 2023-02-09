@@ -53,6 +53,7 @@ public class ProjectionGenerator : IIncrementalGenerator
 
                 var compilation = ctx.SemanticModel.Compilation;
                 var projectionPropertyAttributeSymbol = compilation.GetTypeByMetadataName("ProjectorNet.Attributes.ProjectionPropertyAttribute")!;
+                var collectionProjectionAttributeSymbol = compilation.GetTypeByMetadataName("ProjectorNet.Attributes.CollectionProjectionAttribute")!;
                 var projectionConstructorAttributeSymbol = compilation.GetTypeByMetadataName("ProjectorNet.Attributes.ProjectionConstructorAttribute")!;
 
                 var projectionAttribute = ctx.Attributes.FirstOrDefault();
@@ -70,7 +71,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                 var propertyMappings = projectionTypeSymbol.GetMembers()
                     .OfType<IPropertySymbol>()
                     .Where(p => !p.IsIndexer && !p.IsReadOnly)
-                    .Select(p => GetPropertyMapping(p, sourceProperties, projectionPropertyAttributeSymbol))
+                    .Select(p => GetPropertyMapping(p, sourceProperties, projectionPropertyAttributeSymbol, collectionProjectionAttributeSymbol))
                     .ToImmutableArray();
 
                 var namedArguments = projectionAttribute.NamedArguments.ToDictionary(x => x.Key, x => x.Value);
@@ -199,22 +200,20 @@ public class ProjectionGenerator : IIncrementalGenerator
 
     private static PropertyMapping GetPropertyMapping(IPropertySymbol propertySymbol,
         Dictionary<string, IPropertySymbol> sourceProperties,
-        INamedTypeSymbol projectionPropertyAttributeSymbol)
+        INamedTypeSymbol projectionPropertyAttributeSymbol,
+        INamedTypeSymbol collectionProjectionAttributeSymbol)
     {
         var sourceName = propertySymbol.Name;
         string? conversionMethod = null;
         TypedConstant defaultValue = default;
-        int customCollectionType = 0;
-
+        
         var projectionAttribute = propertySymbol
             .GetAttributes()
             .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, projectionPropertyAttributeSymbol));
 
         if (projectionAttribute != null)
         {
-            var options = projectionAttribute.NamedArguments.ToDictionary(
-                x => x.Key, 
-                x => x.Value);
+            var options = projectionAttribute.NamedArguments.ToDictionary(x => x.Key, x => x.Value);
 
             if (options.TryGetBoolean("Ignore", out var ignore) && ignore)
                 return new IgnoredPropertyMapping(propertySymbol.Name);
@@ -228,27 +227,49 @@ public class ProjectionGenerator : IIncrementalGenerator
             options.TryGetString("ConversionMethod", out conversionMethod);
 
             options.TryGetValue("DefaultValue", out defaultValue);
-
-            options.TryGetInt32("CollectionType", out customCollectionType);
         }
 
         if (!sourceProperties.TryGetValue(sourceName, out var sourcePropertySymbol))
             return new ExpressionPropertyMapping(propertySymbol.Name, "source." +  sourceName); // Return direct mapping to get compile time error.
 
-        if (string.IsNullOrWhiteSpace(conversionMethod) && SymbolEqualityComparer.IncludeNullability.Equals(propertySymbol.Type, sourcePropertySymbol.Type))
-            return new ExpressionPropertyMapping(propertySymbol.Name, "source." + sourceName);
-
-        // TODO: Handle collections
         var collectionType = GetCollectionType(propertySymbol.Type, out var collectionElementType);
         var sourceCollectionType = GetCollectionType(sourcePropertySymbol.Type, out var sourceCollectionElementType);
 
         if (collectionType != CollectionType.None && sourceCollectionType != CollectionType.None)
         {
-            var itemConversionExpression = GetConversionExpression(
-                collectionElementType!, sourceCollectionElementType!, "source", conversionMethod, defaultValue);
-            PropertyMapping itemPropertyMapping = itemConversionExpression != null
-                ? new ExpressionPropertyMapping("source", itemConversionExpression)
-                : new ProjectionPropertyMapping("source", TypeName.FromSymbol(collectionElementType), TypeName.FromSymbol(sourceCollectionElementType));
+            int customCollectionType = 0;
+            PropertyMapping? itemPropertyMapping = null;
+
+            var collectionProjectionAttribute = propertySymbol
+                .GetAttributes()
+                .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, collectionProjectionAttributeSymbol));
+
+            if (collectionProjectionAttribute != null)
+            {
+                var options = collectionProjectionAttribute.NamedArguments.ToDictionary(x => x.Key, x => x.Value);
+
+                if (options.TryGetString("ItemExpression", out var expression) && !string.IsNullOrWhiteSpace(expression))
+                    itemPropertyMapping = new ExpressionPropertyMapping("source", expression);
+
+                options.TryGetInt32("CollectionType", out customCollectionType);
+            }
+            
+            if (itemPropertyMapping == null)
+            {
+                if (string.IsNullOrWhiteSpace(conversionMethod) && customCollectionType == 0 && SymbolEqualityComparer.Default.Equals(propertySymbol.Type, sourcePropertySymbol.Type))
+                {
+                    bool isTargetItemNullable = IsNullable(collectionElementType!, out _);
+                    bool isSourceItemNullable = IsNullable(sourceCollectionElementType!, out _);
+                    if (isTargetItemNullable || (isSourceItemNullable == isTargetItemNullable))
+                        return new ExpressionPropertyMapping(propertySymbol.Name, "source." + sourceName);
+                }
+
+                var itemConversionExpression = GetConversionExpression(
+                    collectionElementType!, sourceCollectionElementType!, "source", conversionMethod, defaultValue);
+                itemPropertyMapping = itemConversionExpression != null
+                    ? new ExpressionPropertyMapping("source", itemConversionExpression)
+                    : new ProjectionPropertyMapping("source", TypeName.FromSymbol(collectionElementType), TypeName.FromSymbol(sourceCollectionElementType));
+            }
 
             var collectionTypeAfterTransform = (CollectionType) Math.Max((int) collectionType, customCollectionType);
 
@@ -264,6 +285,9 @@ public class ProjectionGenerator : IIncrementalGenerator
             
             return new CollectionPropertyMapping(propertySymbol.Name, "source." + sourceName, transform, itemPropertyMapping);
         }
+
+        if (string.IsNullOrWhiteSpace(conversionMethod) && SymbolEqualityComparer.IncludeNullability.Equals(propertySymbol.Type, sourcePropertySymbol.Type))
+            return new ExpressionPropertyMapping(propertySymbol.Name, "source." + sourceName);
 
         var conversionExpression = GetConversionExpression(
             propertySymbol.Type, sourcePropertySymbol.Type, "source." + sourceName, conversionMethod, defaultValue);

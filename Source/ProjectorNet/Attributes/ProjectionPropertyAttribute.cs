@@ -1,6 +1,6 @@
 ﻿namespace ProjectorNet.Attributes;
 
-[AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = false, Inherited = true)]
+[AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
 public sealed class ProjectionPropertyAttribute : Attribute
 {
     public string? SourceName { get; set; }
@@ -12,6 +12,4 @@ public sealed class ProjectionPropertyAttribute : Attribute
     public bool Ignore { get; set; }
 
     public object? DefaultValue { get; set; }
-
-    public CollectionType CollectionType { get; set; }
 }

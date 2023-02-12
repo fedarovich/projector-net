@@ -9,7 +9,7 @@ public sealed class ProjectionPropertyAttribute : Attribute
 
     public string? Expression { get; set; }
 
-    public bool Ignore { get; set; }
-
     public object? DefaultValue { get; set; }
+
+    public bool Ignore { get; set; }
 }

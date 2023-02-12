@@ -37,6 +37,14 @@ public class ProjectionGenerator : IIncrementalGenerator
     private const string EmptyStringLiteral = "\"\"";
     private const string DefaultLiteral = "default";
 
+    private static readonly DiagnosticDescriptor ProjectionConstructorRequiredDiagnostic = new (
+        "PN0001",
+        "Projection constructor is required",
+        "The type {0} must have a single constructor, or a parameterless constructor or a constructor marked with ProjectionConstructor attribute",
+        "Design",
+        DiagnosticSeverity.Error,
+        true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var nullableContextOptionsProvider = context.CompilationProvider.Select((c, _) => c.Options.NullableContextOptions);
@@ -52,9 +60,8 @@ public class ProjectionGenerator : IIncrementalGenerator
                 var projectionType = TypeInfo.FromSymbol(projectionTypeSymbol);
 
                 var compilation = ctx.SemanticModel.Compilation;
-                var projectionPropertyAttributeSymbol = compilation.GetTypeByMetadataName("ProjectorNet.Attributes.ProjectionPropertyAttribute")!;
-                var collectionProjectionAttributeSymbol = compilation.GetTypeByMetadataName("ProjectorNet.Attributes.CollectionProjectionAttribute")!;
                 var projectionConstructorAttributeSymbol = compilation.GetTypeByMetadataName("ProjectorNet.Attributes.ProjectionConstructorAttribute")!;
+                var projectionPropertyProvider = new ProjectionPropertyProvider(compilation);
 
                 var projectionAttribute = ctx.Attributes.FirstOrDefault();
                 if (projectionAttribute is not { ConstructorArguments: [{ Value: INamedTypeSymbol sourceTypeSymbol }, ..] })
@@ -66,12 +73,19 @@ public class ProjectionGenerator : IIncrementalGenerator
                     .Where(p => !p.IsIndexer && !p.IsWriteOnly)
                     .ToDictionary(p => p.Name);
 
+                ImmutableArray<PropertyMapping>? constructorParametersMapping = null;
                 var projectionConstructor = GetProjectionConstructor(projectionTypeSymbol, projectionConstructorAttributeSymbol, ctx.SemanticModel);
+                if (projectionConstructor != null)
+                {
+                    constructorParametersMapping = projectionConstructor.Parameters
+                        .Select(p => GetPropertyMapping(projectionPropertyProvider.FromParameter(p), sourceProperties))
+                        .ToImmutableArray();
+                }
 
                 var propertyMappings = projectionTypeSymbol.GetMembers()
                     .OfType<IPropertySymbol>()
                     .Where(p => !p.IsIndexer && !p.IsReadOnly)
-                    .Select(p => GetPropertyMapping(p, sourceProperties, projectionPropertyAttributeSymbol, collectionProjectionAttributeSymbol))
+                    .Select(p => GetPropertyMapping(projectionPropertyProvider.FromProperty(p), sourceProperties))
                     .ToImmutableArray();
 
                 var namedArguments = projectionAttribute.NamedArguments.ToDictionary(x => x.Key, x => x.Value);
@@ -84,7 +98,8 @@ public class ProjectionGenerator : IIncrementalGenerator
                     ProjectionType = projectionType,
                     SourceTypeName = sourceTypeName,
                     ContextTypeName = contextTypeName,
-                    PropertyMappings = propertyMappings
+                    PropertyMappings = propertyMappings,
+                    ConstructorParameterMappings = constructorParametersMapping
                 };
             }
         ).Where(p => p != null);
@@ -100,7 +115,14 @@ public class ProjectionGenerator : IIncrementalGenerator
                 var typeName = projection!.ProjectionType.Name;
                 var sourceType = projection.SourceTypeName.FullyQualifiedName;
                 var contextType = projection.ContextTypeName?.FullyQualifiedName ?? GetObjectType(nullableContextOptions);
-                
+
+                if (projection.ConstructorParameterMappings == null)
+                {
+                    ctx.ReportDiagnostic(Diagnostic.Create(ProjectionConstructorRequiredDiagnostic, null, projection.ProjectionType.Name));
+                    return;
+                }
+
+                var constructorParameterMappings = projection.ConstructorParameterMappings.Value;
                 ctx.AddSource($"{typeName.Namespace}.{typeName.Name}.g.cs",
                     builder =>
                     {
@@ -115,8 +137,26 @@ public class ProjectionGenerator : IIncrementalGenerator
                         builder.AppendLine(
                             $"public static global::System.Linq.Expressions.Expression<Func<{sourceType}, {typeName.Name}>> GetProjectionExpression({contextType} context) =>");
                         using var indent = builder.Indent();
-                        builder.AppendLine($"source => new {typeName.Name}");
+                        
+                        builder.Append($"source => new {typeName.Name}(");
+                        if (constructorParameterMappings.Count > 0)
+                        {
+                            builder.AppendLine();
+                            AppendParameterMappings(constructorParameterMappings);
+                        }
+                        builder.AppendLine(")");
                         AppendPropertyMappings(projection.PropertyMappings);
+
+                        void AppendParameterMappings(in PropertyMappingCollection propertyMappings)
+                        {
+                            using var ident = builder.Indent();
+                            for (var index = 0; index < propertyMappings.Count; index++)
+                            {
+                                var propertyMapping = propertyMappings[index];
+                                AppendPropertyMapping(propertyMapping);
+                                builder.AppendLine(index != propertyMappings.Count - 1 ? "," : string.Empty);
+                            }
+                        }
 
                         void AppendPropertyMappings(in PropertyMappingCollection propertyMappings)
                         {
@@ -198,70 +238,47 @@ public class ProjectionGenerator : IIncrementalGenerator
             });
     }
 
-    private static PropertyMapping GetPropertyMapping(IPropertySymbol propertySymbol,
-        Dictionary<string, IPropertySymbol> sourceProperties,
-        INamedTypeSymbol projectionPropertyAttributeSymbol,
-        INamedTypeSymbol collectionProjectionAttributeSymbol)
+    private static PropertyMapping GetPropertyMapping(
+        ProjectionProperty projectionProperty,
+        Dictionary<string, IPropertySymbol> sourceProperties)
     {
-        var sourceName = propertySymbol.Name;
-        string? conversionMethod = null;
-        TypedConstant defaultValue = default;
-        
-        var projectionAttribute = propertySymbol
-            .GetAttributes()
-            .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, projectionPropertyAttributeSymbol));
+        if (projectionProperty.Ignore)
+            return new IgnoredPropertyMapping(projectionProperty.Name);
 
-        if (projectionAttribute != null)
-        {
-            var options = projectionAttribute.NamedArguments.ToDictionary(x => x.Key, x => x.Value);
+        if (projectionProperty.UseDefaultValue)
+            return new ExpressionPropertyMapping(projectionProperty.Name, projectionProperty.DefaultValue.Kind != TypedConstantKind.Error
+                ? GetDefaultValueLiteral(projectionProperty.DefaultValue)
+                : $"default({projectionProperty.Type.GetFullyQualifiedName()})");
 
-            if (options.TryGetBoolean("Ignore", out var ignore) && ignore)
-                return new IgnoredPropertyMapping(propertySymbol.Name);
+        if (!string.IsNullOrWhiteSpace(projectionProperty.Expression))
+            return new ExpressionPropertyMapping(projectionProperty.Name, projectionProperty.Expression);
 
-            if (options.TryGetString("Expression", out var expression) && !string.IsNullOrWhiteSpace(expression))
-                return new ExpressionPropertyMapping(propertySymbol.Name, expression);
-
-            if (options.TryGetString("SourceName", out var sn) && !string.IsNullOrWhiteSpace(sn))
-                sourceName = sn;
-
-            options.TryGetString("ConversionMethod", out conversionMethod);
-
-            options.TryGetValue("DefaultValue", out defaultValue);
-        }
+        var sourceName = projectionProperty.SourceName;
+        var conversionMethod = projectionProperty.ConversionMethod;
+        var defaultValue = projectionProperty.DefaultValue;
 
         if (!sourceProperties.TryGetValue(sourceName, out var sourcePropertySymbol))
-            return new ExpressionPropertyMapping(propertySymbol.Name, "source." +  sourceName); // Return direct mapping to get compile time error.
+            return new ExpressionPropertyMapping(projectionProperty.Name, "source." +  sourceName); // Return direct mapping to get compile time error.
 
-        var collectionType = GetCollectionType(propertySymbol.Type, out var collectionElementType);
+        var collectionType = GetCollectionType(projectionProperty.Type, out var collectionElementType);
         var sourceCollectionType = GetCollectionType(sourcePropertySymbol.Type, out var sourceCollectionElementType);
 
         if (collectionType != CollectionType.None && sourceCollectionType != CollectionType.None)
         {
-            int customCollectionType = 0;
-            PropertyMapping? itemPropertyMapping = null;
+            PropertyMapping itemPropertyMapping;
 
-            var collectionProjectionAttribute = propertySymbol
-                .GetAttributes()
-                .FirstOrDefault(a => SymbolEqualityComparer.Default.Equals(a.AttributeClass, collectionProjectionAttributeSymbol));
-
-            if (collectionProjectionAttribute != null)
+            if (!string.IsNullOrWhiteSpace(projectionProperty.ItemExpression))
             {
-                var options = collectionProjectionAttribute.NamedArguments.ToDictionary(x => x.Key, x => x.Value);
-
-                if (options.TryGetString("ItemExpression", out var expression) && !string.IsNullOrWhiteSpace(expression))
-                    itemPropertyMapping = new ExpressionPropertyMapping("source", expression);
-
-                options.TryGetInt32("CollectionType", out customCollectionType);
+                itemPropertyMapping = new ExpressionPropertyMapping("source", projectionProperty.ItemExpression);
             }
-            
-            if (itemPropertyMapping == null)
+            else
             {
-                if (string.IsNullOrWhiteSpace(conversionMethod) && customCollectionType == 0 && SymbolEqualityComparer.Default.Equals(propertySymbol.Type, sourcePropertySymbol.Type))
+                if (string.IsNullOrWhiteSpace(conversionMethod) && projectionProperty.CollectionType == 0 && SymbolEqualityComparer.Default.Equals(projectionProperty.Type, sourcePropertySymbol.Type))
                 {
                     bool isTargetItemNullable = IsNullable(collectionElementType!, out _);
                     bool isSourceItemNullable = IsNullable(sourceCollectionElementType!, out _);
                     if (isTargetItemNullable || (isSourceItemNullable == isTargetItemNullable))
-                        return new ExpressionPropertyMapping(propertySymbol.Name, "source." + sourceName);
+                        return new ExpressionPropertyMapping(projectionProperty.Name, "source." + sourceName);
                 }
 
                 var itemConversionExpression = GetConversionExpression(
@@ -271,7 +288,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                     : new ProjectionPropertyMapping("source", TypeName.FromSymbol(collectionElementType), TypeName.FromSymbol(sourceCollectionElementType));
             }
 
-            var collectionTypeAfterTransform = (CollectionType) Math.Max((int) collectionType, customCollectionType);
+            var collectionTypeAfterTransform = (CollectionType) Math.Max((int) collectionType, projectionProperty.CollectionType);
 
             var transform = collectionTypeAfterTransform switch
             {
@@ -283,17 +300,17 @@ public class ProjectionGenerator : IIncrementalGenerator
                 _ => throw new ArgumentOutOfRangeException()
             };
             
-            return new CollectionPropertyMapping(propertySymbol.Name, "source." + sourceName, transform, itemPropertyMapping);
+            return new CollectionPropertyMapping(projectionProperty.Name, "source." + sourceName, transform, itemPropertyMapping);
         }
 
-        if (string.IsNullOrWhiteSpace(conversionMethod) && SymbolEqualityComparer.IncludeNullability.Equals(propertySymbol.Type, sourcePropertySymbol.Type))
-            return new ExpressionPropertyMapping(propertySymbol.Name, "source." + sourceName);
+        if (string.IsNullOrWhiteSpace(conversionMethod) && SymbolEqualityComparer.IncludeNullability.Equals(projectionProperty.Type, sourcePropertySymbol.Type))
+            return new ExpressionPropertyMapping(projectionProperty.Name, "source." + sourceName);
 
         var conversionExpression = GetConversionExpression(
-            propertySymbol.Type, sourcePropertySymbol.Type, "source." + sourceName, conversionMethod, defaultValue);
+            projectionProperty.Type, sourcePropertySymbol.Type, "source." + sourceName, conversionMethod, defaultValue);
         return conversionExpression != null
-            ? new ExpressionPropertyMapping(propertySymbol.Name, conversionExpression)
-            : new ProjectionPropertyMapping(propertySymbol.Name, TypeName.FromSymbol(propertySymbol.Type), TypeName.FromSymbol(sourcePropertySymbol.Type));
+            ? new ExpressionPropertyMapping(projectionProperty.Name, conversionExpression)
+            : new ProjectionPropertyMapping(projectionProperty.Name, TypeName.FromSymbol(projectionProperty.Type), TypeName.FromSymbol(sourcePropertySymbol.Type));
     }
 
     private static string GetObjectType(NullableContextOptions nullableContextOptions) =>
@@ -387,7 +404,7 @@ public class ProjectionGenerator : IIncrementalGenerator
 
         if (typeSymbol.BaseType is { SpecialType: SpecialType.System_Enum })
         {
-            typeAlias = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            typeAlias = typeSymbol.GetFullyQualifiedName();
             return true;
         }
 
@@ -402,9 +419,9 @@ public class ProjectionGenerator : IIncrementalGenerator
         {
             TypedConstantKind.Error => alternateValue,
             TypedConstantKind.Enum when char.IsNumber(literal[0]) || literal[0] == '-' => 
-                $"({typedConstant.Type!.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}) ({literal})",
+                $"({typedConstant.Type!.GetFullyQualifiedName()}) ({literal})",
             TypedConstantKind.Enum => "global::" + literal,
-            TypedConstantKind.Type => $"typeof({(typedConstant.Value as ITypeSymbol)!.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)})",
+            TypedConstantKind.Type => $"typeof({(typedConstant.Value as ITypeSymbol)!.GetFullyQualifiedName()})",
             _ => typedConstant.ToCSharpString()
         };
     }

@@ -94,14 +94,16 @@ public class SourceTextBuilder
         AppendLine();
     }
 
-    public IDisposable BeginBlock(string terminator = "")
+    public IDisposable BeginBlock(string terminator = "", bool newLine = true)
     {
         AppendLine("{");
         Indentation++;
         return new Disposable(() =>
         {
             Indentation--;
-            AppendLine($"}}{terminator}");
+            Append($"}}{terminator}");
+            if (newLine)
+                AppendLine();
         });
     }
 

@@ -137,28 +137,29 @@ public class ProjectionGenerator : IIncrementalGenerator
                         builder.AppendLine(
                             $"public static global::System.Linq.Expressions.Expression<Func<{sourceType}, {typeName.Name}>> GetProjectionExpression({contextType} context) =>");
                         using var indent = builder.Indent();
-                        
-                        builder.Append($"source => new {typeName.Name}(");
+
+                        var varName = GetVariableName(projection.SourceTypeName);
+                        builder.Append($"{varName} => new {typeName.Name}(");
                         if (constructorParameterMappings.Count > 0)
                         {
                             builder.AppendLine();
-                            AppendParameterMappings(constructorParameterMappings);
+                            AppendParameterMappings(constructorParameterMappings, varName);
                         }
                         builder.AppendLine(")");
-                        AppendPropertyMappings(projection.PropertyMappings);
+                        AppendPropertyMappings(projection.PropertyMappings, varName);
 
-                        void AppendParameterMappings(in PropertyMappingCollection propertyMappings)
+                        void AppendParameterMappings(in PropertyMappingCollection propertyMappings, string variableName)
                         {
                             using var ident = builder.Indent();
                             for (var index = 0; index < propertyMappings.Count; index++)
                             {
                                 var propertyMapping = propertyMappings[index];
-                                AppendPropertyMapping(propertyMapping);
+                                AppendPropertyMapping(propertyMapping, variableName);
                                 builder.AppendLine(index != propertyMappings.Count - 1 ? "," : string.Empty);
                             }
                         }
 
-                        void AppendPropertyMappings(in PropertyMappingCollection propertyMappings)
+                        void AppendPropertyMappings(in PropertyMappingCollection propertyMappings, string variableName)
                         {
                             using var mappingBlock = builder.BeginBlock(";");
                             foreach (var propertyMapping in propertyMappings)
@@ -167,23 +168,24 @@ public class ProjectionGenerator : IIncrementalGenerator
                                     continue;
 
                                 builder.Append($"{propertyMapping.ProjectionName} = ");
-                                AppendPropertyMapping(propertyMapping);
+                                AppendPropertyMapping(propertyMapping, variableName);
                                 builder.AppendLine(",");
                             }
                         }
 
-                        void AppendPropertyMapping(PropertyMapping propertyMapping)
+                        void AppendPropertyMapping(PropertyMapping propertyMapping, string variableName)
                         {
                             switch (propertyMapping)
                             {
                                 case ExpressionPropertyMapping epm:
-                                    builder.Append($"{epm.Expression}");
+                                    builder.Append(AdjustSourceName(epm.Expression, variableName));
                                     break;
                                 case CollectionPropertyMapping cpm:
-                                    builder.AppendLine($"{cpm.SourceName}.Select(source => ");
+                                    var itemName = GetVariableName(cpm.SourceItemType);
+                                    builder.AppendLine($"{AdjustSourceName(cpm.SourceName, variableName)}.Select({itemName} => ");
                                     using (builder.Indent())
                                     {
-                                        AppendPropertyMapping(cpm.ItemMapping);
+                                        AppendPropertyMapping(cpm.ItemMapping, itemName);
                                         builder.AppendLine();
                                     }
                                     builder.Append(")");
@@ -258,7 +260,7 @@ public class ProjectionGenerator : IIncrementalGenerator
         var defaultValue = projectionProperty.DefaultValue;
 
         if (!sourceProperties.TryGetValue(sourceName, out var sourcePropertySymbol))
-            return new ExpressionPropertyMapping(projectionProperty.Name, "source." +  sourceName); // Return direct mapping to get compile time error.
+            return new ExpressionPropertyMapping(projectionProperty.Name, "$source." +  sourceName); // Return direct mapping to get compile time error.
 
         var collectionType = GetCollectionType(projectionProperty.Type, out var collectionElementType);
         var sourceCollectionType = GetCollectionType(sourcePropertySymbol.Type, out var sourceCollectionElementType);
@@ -269,7 +271,7 @@ public class ProjectionGenerator : IIncrementalGenerator
 
             if (!string.IsNullOrWhiteSpace(projectionProperty.ItemExpression))
             {
-                itemPropertyMapping = new ExpressionPropertyMapping("source", projectionProperty.ItemExpression);
+                itemPropertyMapping = new ExpressionPropertyMapping(string.Empty, projectionProperty.ItemExpression);
             }
             else
             {
@@ -278,14 +280,14 @@ public class ProjectionGenerator : IIncrementalGenerator
                     bool isTargetItemNullable = IsNullable(collectionElementType!, out _);
                     bool isSourceItemNullable = IsNullable(sourceCollectionElementType!, out _);
                     if (isTargetItemNullable || (isSourceItemNullable == isTargetItemNullable))
-                        return new ExpressionPropertyMapping(projectionProperty.Name, "source." + sourceName);
+                        return new ExpressionPropertyMapping(projectionProperty.Name, "$source." + sourceName);
                 }
 
                 var itemConversionExpression = GetConversionExpression(
-                    collectionElementType!, sourceCollectionElementType!, "source", conversionMethod, defaultValue);
+                    collectionElementType!, sourceCollectionElementType!, "$source", conversionMethod, defaultValue);
                 itemPropertyMapping = itemConversionExpression != null
-                    ? new ExpressionPropertyMapping("source", itemConversionExpression)
-                    : new ProjectionPropertyMapping("source", TypeName.FromSymbol(collectionElementType), TypeName.FromSymbol(sourceCollectionElementType));
+                    ? new ExpressionPropertyMapping(string.Empty, itemConversionExpression)
+                    : new ProjectionPropertyMapping(string.Empty, TypeName.FromSymbol(collectionElementType), TypeName.FromSymbol(sourceCollectionElementType));
             }
 
             var collectionTypeAfterTransform = (CollectionType) Math.Max((int) collectionType, projectionProperty.CollectionType);
@@ -300,14 +302,14 @@ public class ProjectionGenerator : IIncrementalGenerator
                 _ => throw new ArgumentOutOfRangeException()
             };
             
-            return new CollectionPropertyMapping(projectionProperty.Name, "source." + sourceName, transform, itemPropertyMapping);
+            return new CollectionPropertyMapping(projectionProperty.Name, "$source." + sourceName, TypeName.FromSymbol(sourceCollectionElementType), transform, itemPropertyMapping);
         }
 
         if (string.IsNullOrWhiteSpace(conversionMethod) && SymbolEqualityComparer.IncludeNullability.Equals(projectionProperty.Type, sourcePropertySymbol.Type))
-            return new ExpressionPropertyMapping(projectionProperty.Name, "source." + sourceName);
+            return new ExpressionPropertyMapping(projectionProperty.Name, "$source." + sourceName);
 
         var conversionExpression = GetConversionExpression(
-            projectionProperty.Type, sourcePropertySymbol.Type, "source." + sourceName, conversionMethod, defaultValue);
+            projectionProperty.Type, sourcePropertySymbol.Type, "$source." + sourceName, conversionMethod, defaultValue);
         return conversionExpression != null
             ? new ExpressionPropertyMapping(projectionProperty.Name, conversionExpression)
             : new ProjectionPropertyMapping(projectionProperty.Name, TypeName.FromSymbol(projectionProperty.Type), TypeName.FromSymbol(sourcePropertySymbol.Type));
@@ -515,6 +517,20 @@ public class ProjectionGenerator : IIncrementalGenerator
         bool IsEnumerable(INamedTypeSymbol symbol) =>
             symbol.SpecialType is SpecialType.System_Collections_Generic_IEnumerable_T;
     }
+
+    private string GetVariableName(TypeName typeName)
+    {
+        var variableName = typeName.Name.Camelize();
+        if (SyntaxFacts.GetKeywordKind(variableName) != SyntaxKind.None ||
+            SyntaxFacts.GetContextualKeywordKind(variableName) != SyntaxKind.None)
+        {
+            variableName = "@" + variableName;
+        }
+
+        return variableName;
+    }
+
+    private string AdjustSourceName(string expression, string variableName) => expression.Replace("$source", variableName);
 
     private record PrimitiveType(SpecialType SpecialType, string Name, string DefaultValue, bool IsNumeric = true)
     {

@@ -45,6 +45,14 @@ public class ProjectionGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         true);
 
+    private static readonly DiagnosticDescriptor CircularDependenciesDiagnostic = new(
+        "PN0002",
+        "The projected type has circular dependencies",
+        "The type {0} has circular dependencies and thus cannot be projected",
+        "Design",
+        DiagnosticSeverity.Error,
+        true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var nullableContextOptionsProvider = context.CompilationProvider.Select((c, _) => c.Options.NullableContextOptions);
@@ -107,11 +115,67 @@ public class ProjectionGenerator : IIncrementalGenerator
         var projectionsInNamespaceProvider = projectionProvider.Collect()
             .SelectMany((projections, _) => projections.GroupBy(p => p!.ProjectionType.Name.Namespace));
 
+        var rootProjectionProvider = projectionProvider.Collect()
+            .SelectMany((projections, ct) =>
+            {
+                var nonRootTypes = projections
+                    .SelectMany(p => p!.GetAllMappings())
+                    .OfType<ProjectionPropertyMapping>()
+                    .Select(m => m.ProjectionType)
+                    .ToHashSet();
+
+                var projectionTypes = projections.ToDictionary(p => p!.ProjectionType.Name);
+
+                var rootProjections = projections
+                    .Where(p => !nonRootTypes.Contains(p!.ProjectionType.Name))
+                    .ToArray();
+
+                var result = new SortedDictionary<TypeName, ProjectionDependencies>(TypeNameComparer.Instance);
+                foreach (var rootProjection in rootProjections)
+                {
+                    BuildProjectionDependencies(rootProjection!, ImmutableHashSet<TypeName>.Empty);
+                }
+                return result.Values.ToImmutableArray();
+
+                ImmutableDictionary<TypeName, Projection?>? BuildProjectionDependencies(Projection projection, ImmutableHashSet<TypeName> visited)
+                {
+                    if (visited.Contains(projection.ProjectionType.Name))
+                        return null;
+
+                    ImmutableDictionary<TypeName, Projection?>? dependencies = ImmutableDictionary<TypeName, Projection?>.Empty;
+                    var newVisited = visited.Add(projection.ProjectionType.Name);
+                    foreach (var mapping in projection.GetAllMappings().OfType<ProjectionPropertyMapping>())
+                    {
+                        projectionTypes.TryGetValue(mapping.ProjectionType, out var childProjection);
+                        if (childProjection == null)
+                        {
+                            dependencies = dependencies?.SetItem(mapping.ProjectionType, null);
+                            continue;
+                        }
+
+                        var childDependencies = BuildProjectionDependencies(childProjection, newVisited);
+                        dependencies = childDependencies != null ? dependencies?.SetItems(childDependencies) : null;
+                        dependencies = dependencies?.SetItem(mapping.ProjectionType, childProjection);
+                    }
+
+                    if (!result.ContainsKey(projection.ProjectionType.Name))
+                    {
+                        result[projection.ProjectionType.Name] = new ProjectionDependencies
+                        {
+                            Projection = projection,
+                            Dependencies = dependencies
+                        };
+                    }
+
+                    return dependencies;
+                }
+            });
+
         context.RegisterSourceOutput(
-            projectionProvider.Combine(nullableContextOptionsProvider),
+            rootProjectionProvider.Combine(nullableContextOptionsProvider),
             (ctx, arg) =>
             {
-                var (projection, nullableContextOptions) = arg;
+                var ((projection, dependencies), nullableContextOptions) = arg;
                 var typeName = projection!.ProjectionType.Name;
                 var sourceType = projection.SourceTypeName.FullyQualifiedName;
                 var contextType = projection.ContextTypeName?.FullyQualifiedName ?? GetObjectType(nullableContextOptions);
@@ -122,7 +186,12 @@ public class ProjectionGenerator : IIncrementalGenerator
                     return;
                 }
 
-                var constructorParameterMappings = projection.ConstructorParameterMappings.Value;
+                if (dependencies == null)
+                {
+                    ctx.ReportDiagnostic(Diagnostic.Create(CircularDependenciesDiagnostic, null, projection.ProjectionType.Name));
+                    return;
+                }
+
                 ctx.AddSource($"{typeName.Namespace}.{typeName.Name}.g.cs",
                     builder =>
                     {
@@ -139,14 +208,22 @@ public class ProjectionGenerator : IIncrementalGenerator
                         using var indent = builder.Indent();
 
                         var varName = GetVariableName(projection.SourceTypeName);
-                        builder.Append($"{varName} => new {typeName.Name}(");
-                        if (constructorParameterMappings.Count > 0)
+                        builder.Append($"{varName} => ");
+                        AppendProjection(projection, varName);
+                        builder.AppendLine(";");
+
+                        void AppendProjection(Projection subProjection, string variableName)
                         {
-                            builder.AppendLine();
-                            AppendParameterMappings(constructorParameterMappings, varName);
+                            var constructorParameterMappings = subProjection.ConstructorParameterMappings.GetValueOrDefault();
+                            builder.Append($"new {typeName.FullyQualifiedName}(");
+                            if (constructorParameterMappings.Count > 0)
+                            {
+                                builder.AppendLine();
+                                AppendParameterMappings(constructorParameterMappings, variableName);
+                            }
+                            builder.AppendLine(")");
+                            AppendPropertyMappings(subProjection.PropertyMappings, variableName);
                         }
-                        builder.AppendLine(")");
-                        AppendPropertyMappings(projection.PropertyMappings, varName);
 
                         void AppendParameterMappings(in PropertyMappingCollection propertyMappings, string variableName)
                         {
@@ -161,7 +238,7 @@ public class ProjectionGenerator : IIncrementalGenerator
 
                         void AppendPropertyMappings(in PropertyMappingCollection propertyMappings, string variableName)
                         {
-                            using var mappingBlock = builder.BeginBlock(";");
+                            using var mappingBlock = builder.BeginBlock(newLine: false);
                             foreach (var propertyMapping in propertyMappings)
                             {
                                 if (propertyMapping is IgnoredPropertyMapping)
@@ -197,6 +274,15 @@ public class ProjectionGenerator : IIncrementalGenerator
                                         CollectionTransform.ToHashSet => ".ToHashSet()",
                                         _ => throw new ArgumentOutOfRangeException()
                                     });
+                                    break;
+                                case ProjectionPropertyMapping ppm:
+                                    dependencies.TryGetValue(ppm.ProjectionType, out var subProjection);
+                                    if (subProjection == null)
+                                    {
+                                        builder.Append(AdjustSourceName(ppm.SourcePath, variableName));
+                                        return;
+                                    }
+                                    AppendProjection(subProjection, AdjustSourceName(ppm.SourcePath, variableName));
                                     break;
                                 default:
                                     throw new ArgumentOutOfRangeException(nameof(propertyMapping));
@@ -287,7 +373,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                     collectionElementType!, sourceCollectionElementType!, "$source", conversionMethod, defaultValue);
                 itemPropertyMapping = itemConversionExpression != null
                     ? new ExpressionPropertyMapping(string.Empty, itemConversionExpression)
-                    : new ProjectionPropertyMapping(string.Empty, TypeName.FromSymbol(collectionElementType), TypeName.FromSymbol(sourceCollectionElementType));
+                    : new ProjectionPropertyMapping(string.Empty, TypeName.FromSymbol(collectionElementType), "$source", TypeName.FromSymbol(sourceCollectionElementType));
             }
 
             var collectionTypeAfterTransform = (CollectionType) Math.Max((int) collectionType, projectionProperty.CollectionType);
@@ -312,7 +398,7 @@ public class ProjectionGenerator : IIncrementalGenerator
             projectionProperty.Type, sourcePropertySymbol.Type, "$source." + sourceName, conversionMethod, defaultValue);
         return conversionExpression != null
             ? new ExpressionPropertyMapping(projectionProperty.Name, conversionExpression)
-            : new ProjectionPropertyMapping(projectionProperty.Name, TypeName.FromSymbol(projectionProperty.Type), TypeName.FromSymbol(sourcePropertySymbol.Type));
+            : new ProjectionPropertyMapping(projectionProperty.Name, TypeName.FromSymbol(projectionProperty.Type), "$source." + sourceName, TypeName.FromSymbol(sourcePropertySymbol.Type));
     }
 
     private static string GetObjectType(NullableContextOptions nullableContextOptions) =>

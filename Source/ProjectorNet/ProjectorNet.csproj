@@ -4,6 +4,15 @@
     <TargetFramework>net7.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <Authors>Pavel Fedarovich</Authors>
+    <Copyright>© Pavel Fedarovich, 2023</Copyright>
+    <PackageProjectUrl>https://github.com/fedarovich/projector-net</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/fedarovich/projector-net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>True</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
 </Project>

@@ -7,6 +7,12 @@
     <EnforceExtendedAnalyzerRules>True</EnforceExtendedAnalyzerRules>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <IncludeBuildOutput>false</IncludeBuildOutput>
+    <Authors>Pavel Fedarovich</Authors>
+    <Copyright>© Pavel Fedarovich, 2023</Copyright>
+    <PackageProjectUrl>https://github.com/fedarovich/projector-net</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/fedarovich/projector-net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>

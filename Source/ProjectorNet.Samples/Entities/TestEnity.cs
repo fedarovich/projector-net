@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace ProjectorNet.Samples.Entities;
+﻿namespace ProjectorNet.Samples.Entities;
 
 public class TestEntity
 {
@@ -14,9 +8,13 @@ public class TestEntity
 
     public string NotNullString { get; set; } = null!;
 
+    public SubEntity SubEntity { get; set; } = null!;
+
     public int? IntToLong { get; set; }
 
-    public ICollection<string> Strings { get; set; } = null!;
+    public ICollection<SubEntity> SubEntities { get; set; } = null!;
+
+    public ICollection<string?> Strings { get; set; } = null!;
 
     public ICollection<int> IntsToString { get; set; } = null!;
 }

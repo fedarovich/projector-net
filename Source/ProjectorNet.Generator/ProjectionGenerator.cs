@@ -215,7 +215,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                         void AppendProjection(Projection subProjection, string variableName)
                         {
                             var constructorParameterMappings = subProjection.ConstructorParameterMappings.GetValueOrDefault();
-                            builder.Append($"new {typeName.FullyQualifiedName}(");
+                            builder.Append($"new {subProjection.ProjectionType.Name.FullyQualifiedName}(");
                             if (constructorParameterMappings.Count > 0)
                             {
                                 builder.AppendLine();

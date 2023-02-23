@@ -23,20 +23,4 @@ public readonly record struct TypeName(string Name, string Namespace, string Ful
             _ => throw new ArgumentException($"The {nameof(symbol)} must be a {nameof(INamedTypeSymbol)}", nameof(symbol))
         };
     }
-
-    public bool Equals(TypeName other)
-    {
-        return Name == other.Name && Namespace == other.Namespace && FullyQualifiedName == other.FullyQualifiedName;
-    }
-
-    public override int GetHashCode()
-    {
-        unchecked
-        {
-            var hashCode = (Name != null ? Name.GetHashCode() : 0);
-            hashCode = (hashCode * 397) ^ (Namespace != null ? Namespace.GetHashCode() : 0);
-            hashCode = (hashCode * 397) ^ (FullyQualifiedName != null ? FullyQualifiedName.GetHashCode() : 0);
-            return hashCode;
-        }
-    }
 }

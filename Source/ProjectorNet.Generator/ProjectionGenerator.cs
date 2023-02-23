@@ -124,7 +124,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                     .Select(m => m.ProjectionType)
                     .ToHashSet();
 
-                var projectionTypes = projections.ToDictionary(p => p!.ProjectionType.Name);
+                var projectionTypes = projections.ToDictionary(p => p!.ProjectionType.Name, TypeNameEqualityComparer.FullyQualifiedIgnoreNullability);
 
                 var rootProjections = projections
                     .Where(p => !nonRootTypes.Contains(p!.ProjectionType.Name))
@@ -133,7 +133,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                 var result = new SortedDictionary<TypeName, ProjectionDependencies>(TypeNameComparer.Instance);
                 foreach (var rootProjection in rootProjections)
                 {
-                    BuildProjectionDependencies(rootProjection!, ImmutableHashSet<TypeName>.Empty);
+                    BuildProjectionDependencies(rootProjection!, ImmutableHashSet<TypeName>.Empty.WithComparer(TypeNameEqualityComparer.FullyQualifiedIgnoreNullability));
                 }
                 return result.Values.ToImmutableArray();
 
@@ -142,7 +142,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                     if (visited.Contains(projection.ProjectionType.Name))
                         return null;
 
-                    ImmutableDictionary<TypeName, Projection?>? dependencies = ImmutableDictionary<TypeName, Projection?>.Empty;
+                    ImmutableDictionary<TypeName, Projection?>? dependencies = ImmutableDictionary<TypeName, Projection?>.Empty.WithComparers(TypeNameEqualityComparer.FullyQualifiedIgnoreNullability);
                     var newVisited = visited.Add(projection.ProjectionType.Name);
                     foreach (var mapping in projection.GetAllMappings().OfType<ProjectionPropertyMapping>())
                     {

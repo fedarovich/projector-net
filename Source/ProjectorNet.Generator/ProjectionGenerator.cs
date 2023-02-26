@@ -76,9 +76,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                     return null;
 
                 var sourceTypeName = TypeName.FromSymbol(sourceTypeSymbol);
-                var sourceProperties = sourceTypeSymbol.GetAllProperties()
-                    .Where(p => !p.IsIndexer && !p.IsWriteOnly)
-                    .ToDictionary(p => p.Name);
+                var sourceProperties = sourceTypeSymbol.GetProperties(true, p => !p.IsIndexer && !p.IsWriteOnly);
 
                 ImmutableArray<PropertyMapping>? constructorParametersMapping = null;
                 var projectionConstructor = GetProjectionConstructor(projectionTypeSymbol, projectionConstructorAttributeSymbol, ctx.SemanticModel);
@@ -327,7 +325,7 @@ public class ProjectionGenerator : IIncrementalGenerator
 
     private static PropertyMapping GetPropertyMapping(
         ProjectionProperty projectionProperty,
-        Dictionary<string, IPropertySymbol> sourceProperties)
+        IReadOnlyDictionary<string, IPropertySymbol> sourceProperties)
     {
         if (projectionProperty.Ignore)
             return new IgnoredPropertyMapping(projectionProperty.Name);

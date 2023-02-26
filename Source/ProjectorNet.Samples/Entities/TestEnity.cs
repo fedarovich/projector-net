@@ -1,9 +1,7 @@
 ﻿namespace ProjectorNet.Samples.Entities;
 
-public class TestEntity
+public class TestEntity : EntityBase
 {
-    public int Id { get; set; }
-
     public string? NullString { get; set; }
 
     public string NotNullString { get; set; } = null!;

@@ -76,8 +76,7 @@ public class ProjectionGenerator : IIncrementalGenerator
                     return null;
 
                 var sourceTypeName = TypeName.FromSymbol(sourceTypeSymbol);
-                var sourceProperties = sourceTypeSymbol.GetMembers()
-                    .OfType<IPropertySymbol>()
+                var sourceProperties = sourceTypeSymbol.GetAllProperties()
                     .Where(p => !p.IsIndexer && !p.IsWriteOnly)
                     .ToDictionary(p => p.Name);
 

@@ -141,18 +141,31 @@ public class ProjectionGenerator : IIncrementalGenerator
 
                     ImmutableDictionary<TypeName, Projection?>? dependencies = ImmutableDictionary<TypeName, Projection?>.Empty.WithComparers(TypeNameEqualityComparer.FullyQualifiedIgnoreNullability);
                     var newVisited = visited.Add(projection.ProjectionType.Name);
-                    foreach (var mapping in projection.GetAllMappings().OfType<ProjectionPropertyMapping>())
+                    foreach (var mapping in projection.GetAllMappings())
                     {
-                        projectionTypes.TryGetValue(mapping.ProjectionType, out var childProjection);
+                        TypeName mappingProjectionType;
+                        switch (mapping)
+                        {
+                            case ProjectionPropertyMapping ppm:
+                                mappingProjectionType = ppm.ProjectionType;
+                                break;
+                            case CollectionPropertyMapping { ItemMapping: ProjectionPropertyMapping im }:
+                                mappingProjectionType = im.ProjectionType;
+                                break;
+                            default:
+                                continue;
+                        }
+
+                        projectionTypes.TryGetValue(mappingProjectionType, out var childProjection);
                         if (childProjection == null)
                         {
-                            dependencies = dependencies?.SetItem(mapping.ProjectionType, null);
+                            dependencies = dependencies?.SetItem(mappingProjectionType, null);
                             continue;
                         }
 
                         var childDependencies = BuildProjectionDependencies(childProjection, newVisited);
                         dependencies = childDependencies != null ? dependencies?.SetItems(childDependencies) : null;
-                        dependencies = dependencies?.SetItem(mapping.ProjectionType, childProjection);
+                        dependencies = dependencies?.SetItem(mappingProjectionType, childProjection);
                     }
 
                     if (!result.ContainsKey(projection.ProjectionType.Name))

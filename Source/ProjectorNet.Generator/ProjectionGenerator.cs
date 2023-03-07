@@ -371,7 +371,9 @@ public class ProjectionGenerator : IIncrementalGenerator
             }
             else
             {
-                if (string.IsNullOrWhiteSpace(conversionMethod) && projectionProperty.CollectionType == 0 && SymbolEqualityComparer.Default.Equals(projectionProperty.Type, sourcePropertySymbol.Type))
+                if (string.IsNullOrWhiteSpace(conversionMethod) && projectionProperty.CollectionType == 0 && 
+                    string.IsNullOrWhiteSpace(projectionProperty.ItemFilterExpression) && projectionProperty.ItemTypeFilter == null &&
+                    SymbolEqualityComparer.Default.Equals(projectionProperty.Type, sourcePropertySymbol.Type))
                 {
                     bool isTargetItemNullable = IsNullable(collectionElementType!, out _);
                     bool isSourceItemNullable = IsNullable(sourceCollectionElementType!, out _);
@@ -397,8 +399,11 @@ public class ProjectionGenerator : IIncrementalGenerator
                 CollectionType.Array => CollectionTransform.ToArray,
                 _ => throw new ArgumentOutOfRangeException()
             };
-            
-            return new CollectionPropertyMapping(projectionProperty.Name, "$source." + sourceName, TypeName.FromSymbol(sourceCollectionElementType), transform, itemPropertyMapping);
+
+            var typeFilter = projectionProperty.ItemTypeFilter != null ? $".OfType<{projectionProperty.ItemTypeFilter.GetFullyQualifiedName()}>()" : null;
+            var itemFilter = string.IsNullOrWhiteSpace(projectionProperty.ItemFilterExpression) ? null : $".Where(item => {projectionProperty.ItemFilterExpression})";
+
+            return new CollectionPropertyMapping(projectionProperty.Name, $"$source.{sourceName}{typeFilter}{itemFilter}", TypeName.FromSymbol(sourceCollectionElementType), transform, itemPropertyMapping);
         }
 
         if (string.IsNullOrWhiteSpace(conversionMethod) && SymbolEqualityComparer.IncludeNullability.Equals(projectionProperty.Type, sourcePropertySymbol.Type))

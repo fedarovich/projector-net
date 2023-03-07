@@ -3,7 +3,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Text;
 using Microsoft.CodeAnalysis;
 
 namespace ProjectorNet.Generator.Model;
@@ -31,7 +30,7 @@ public class ProjectionPropertyProvider
 
         GetProjectionOptions(projectionAttribute, out var sourceName, out var ignore, out var useDefaultValue,
             out var conversionMethod, out var expression, out var defaultValue);
-        GetCollectionOptions(collectionProjectionAttribute, out var itemExpression, out var collectionType);
+        GetCollectionOptions(collectionProjectionAttribute, out var itemExpression, out var collectionType, out var itemTypeFilter, out var itemFilterExpression);
 
         return new ProjectionProperty
         {
@@ -44,7 +43,9 @@ public class ProjectionPropertyProvider
             Expression = expression,
             DefaultValue = defaultValue,
             ItemExpression = itemExpression,
-            CollectionType = collectionType
+            CollectionType = collectionType,
+            ItemTypeFilter = itemTypeFilter,
+            ItemFilterExpression = itemFilterExpression
         };
     }
 
@@ -56,7 +57,7 @@ public class ProjectionPropertyProvider
 
         GetProjectionOptions(projectionAttribute, out var sourceName, out var ignore, out var useDefaultValue,
             out var conversionMethod, out var expression, out var defaultValue);
-        GetCollectionOptions(collectionProjectionAttribute, out var itemExpression, out var collectionType);
+        GetCollectionOptions(collectionProjectionAttribute, out var itemExpression, out var collectionType, out var itemTypeFilter, out var itemFilterExpression);
 
         return new ProjectionProperty
         {
@@ -69,7 +70,9 @@ public class ProjectionPropertyProvider
             Expression = expression,
             DefaultValue = defaultValue,
             ItemExpression = itemExpression,
-            CollectionType = collectionType
+            CollectionType = collectionType,
+            ItemTypeFilter = itemTypeFilter,
+            ItemFilterExpression = itemFilterExpression
         };
     }
 
@@ -87,11 +90,13 @@ public class ProjectionPropertyProvider
     }
 
     private void GetCollectionOptions(AttributeData? collectionProjectionAttribute,
-        out string? itemExpression, out int collectionType)
+        out string? itemExpression, out int collectionType, out INamedTypeSymbol? itemTypeFilter, out string? filterExpression)
     {
         var options = collectionProjectionAttribute?.NamedArguments.ToDictionary(x => x.Key, x => x.Value) ?? EmptyDictionary;
         options.TryGetString("ItemExpression", out itemExpression);
         options.TryGetInt32("CollectionType", out collectionType);
+        options.TryGetType("ItemTypeFilter", out itemTypeFilter);
+        options.TryGetString("FilterExpression", out filterExpression);
     }
 
     private static AttributeData? GetAttribute(ImmutableArray<AttributeData> attributes, INamedTypeSymbol attributeType) =>
